@@ -151,6 +151,8 @@ class Exp_Classification(Exp_Basic):
         preds = []
         trues = []
         folder_path = './test_results/' + setting + '/'
+        print("******************************************")
+        print(folder_path)
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
 

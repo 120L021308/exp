@@ -86,21 +86,19 @@ class Model(nn.Module):
                                            configs.dropout)
         self.layer = configs.e_layers
         self.layer_norm = nn.LayerNorm(configs.d_model)
-        if self.task_name == 'long_term_forecast' or self.task_name == 'short_term_forecast':
-            self.predict_linear = nn.Linear(
-                self.seq_len, self.pred_len + self.seq_len)
-            self.projection = nn.Linear(
-                configs.d_model, configs.c_out, bias=True)
-        if self.task_name == 'imputation' or self.task_name == 'anomaly_detection':
-            self.projection = nn.Linear(
-                configs.d_model, configs.c_out, bias=True)
+        # if self.task_name == 'long_term_forecast' or self.task_name == 'short_term_forecast':
+        #     self.predict_linear = nn.Linear(
+        #         self.seq_len, self.pred_len + self.seq_len)
+        #     self.projection = nn.Linear(
+        #         configs.d_model, configs.c_out, bias=True)
+        # if self.task_name == 'imputation' or self.task_name == 'anomaly_detection':
+        #     self.projection = nn.Linear(
+        #         configs.d_model, configs.c_out, bias=True)
         if self.task_name == 'classification':
             self.act = F.gelu
             self.dropout = nn.Dropout(configs.dropout)
             self.projection = nn.Linear(
                 configs.d_model * configs.seq_len, configs.num_class)
-
-
 
     def imputation(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask):
         # Normalization from Non-stationary Transformer
@@ -129,7 +127,6 @@ class Model(nn.Module):
                   (means[:, 0, :].unsqueeze(1).repeat(
                       1, self.pred_len + self.seq_len, 1))
         return dec_out
-
 
     def classification(self, x_enc, x_mark_enc):
         # embedding
