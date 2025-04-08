@@ -5,6 +5,8 @@ import torch.backends
 
 from exp.exp_imputation import Exp_Imputation
 from exp.exp_classification import Exp_Classification
+# 导入新的对抗性分类实验类
+from exp.exp_adversarial_classification import Exp_AdversarialClassification
 from utils.print_args import print_args
 import random
 import numpy as np
@@ -19,7 +21,7 @@ if __name__ == '__main__':
 
     # basic config
     parser.add_argument('--task_name', type=str, required=True, default='long_term_forecast',
-                        help='task name, options:[long_term_forecast, short_term_forecast, imputation, classification, anomaly_detection]')
+                        help='task name, options:[long_term_forecast, short_term_forecast, imputation, classification, adversarial_classification]')
     parser.add_argument('--label_len', type=int, default=24, help='Label length for decoder input')
     parser.add_argument('--is_training', type=int, required=True, default=1, help='status')
     parser.add_argument('--model_id', type=str, required=True, default='test', help='model id')
@@ -37,12 +39,36 @@ if __name__ == '__main__':
                         help='freq for time features encoding, options:[s:secondly, t:minutely, h:hourly, d:daily, b:business days, w:weekly, m:monthly], you can also use more detailed freq like 15min or 3h')
     parser.add_argument('--checkpoints', type=str, default='./checkpoints/', help='location of model checkpoints')
 
-
-
     # inputation task
     parser.add_argument('--mask_rate', type=float, default=0.25, help='mask ratio')
 
-
+    # 对抗性掩码参数
+    parser.add_argument('--use_adversarial_mask', action='store_true', default=False,
+                        help='whether to use adversarial masking')
+    parser.add_argument('--use_random_mask', action='store_true', default=False,
+                        help='whether to use random masking')
+    parser.add_argument('--max_missing', type=float, default=0.2,
+                        help='maximum ratio of masked values')
+    parser.add_argument('--target_performance_drop', type=float, default=0.3,
+                        help='target performance drop ratio')
+    parser.add_argument('--performance_threshold', type=float, default=0.05,
+                        help='threshold for performance difference')
+    parser.add_argument('--tau', type=float, default=0.5,
+                        help='temperature parameter for Gumbel-Softmax')
+    parser.add_argument('--mask_learning_rate', type=float, default=0.01,
+                        help='learning rate for mask optimization')
+    parser.add_argument('--lambda_sparsity', type=float, default=20.0,
+                        help='sparsity penalty coefficient')
+    parser.add_argument('--apply_mask_in_validation', action='store_true', default=False,
+                        help='whether to apply mask during validation')
+    parser.add_argument('--filling_method', type=str, default='zero',
+                        help='filling method for missing values: zero, mean, knn, interpolation')
+    parser.add_argument('--exact_mask_ratio', type=float, default=None,
+                        help='指定精确的掩码缺失比例，优先级高于max_missing')
+    parser.add_argument('--save_mask', action='store_true', default=False,
+                        help='是否保存掩码矩阵到文件')
+    parser.add_argument('--mask_save_path', type=str, default='./masks/',
+                        help='掩码矩阵保存路径')
 
     # model define
     parser.add_argument('--expand', type=int, default=2, help='expansion factor for Mamba')
@@ -77,6 +103,7 @@ if __name__ == '__main__':
                         help='down sampling method, only support avg, max, conv')
     parser.add_argument('--seg_len', type=int, default=96,
                         help='the length of segmen-wise iteration of SegRNN')
+    parser.add_argument('--patch_len', type=int, default=16, help='patch length')
 
     # optimization
     parser.add_argument('--num_workers', type=int, default=0, help='data loader num workers')
@@ -130,9 +157,6 @@ if __name__ == '__main__':
                         help="Discrimitive shapeDTW warp preset augmentation")
     parser.add_argument('--extra_tag', type=str, default="", help="Anything extra")
 
-    # TimeXer
-    parser.add_argument('--patch_len', type=int, default=16, help='patch length')
-
     args = parser.parse_args()
     if torch.cuda.is_available() and args.use_gpu:
         args.device = torch.device('cuda:{}'.format(args.gpu))
@@ -153,10 +177,15 @@ if __name__ == '__main__':
     print('Args in experiment:')
     print_args(args)
 
+    # 根据任务类型选择实验类
     if args.task_name == 'imputation':
         Exp = Exp_Imputation
     elif args.task_name == 'classification':
         Exp = Exp_Classification
+    elif args.task_name == 'adversarial_classification':
+        Exp = Exp_AdversarialClassification
+    else:
+        raise ValueError(f"不支持的任务类型: {args.task_name}")
 
     if args.is_training:
         for ii in range(args.itr):

@@ -99,6 +99,11 @@ class Model(nn.Module):
             self.dropout = nn.Dropout(configs.dropout)
             self.projection = nn.Linear(
                 configs.d_model * configs.seq_len, configs.num_class)
+        if self.task_name == 'adversarial_classification':
+            self.act = F.gelu
+            self.dropout = nn.Dropout(configs.dropout)
+            self.projection = nn.Linear(
+            configs.d_model * configs.seq_len, configs.num_class)
 
     def imputation(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask):
         # Normalization from Non-stationary Transformer
@@ -158,6 +163,9 @@ class Model(nn.Module):
             dec_out = self.anomaly_detection(x_enc)
             return dec_out  # [B, L, D]
         if self.task_name == 'classification':
+            dec_out = self.classification(x_enc, x_mark_enc)
+            return dec_out  # [B, N]
+        if self.task_name == 'adversarial_classification':
             dec_out = self.classification(x_enc, x_mark_enc)
             return dec_out  # [B, N]
         return None

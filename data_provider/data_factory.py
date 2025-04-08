@@ -49,6 +49,26 @@ def data_provider(args, flag):
             collate_fn=lambda x: collate_fn(x, max_len=args.seq_len)
         )
         return data_set, data_loader
+
+    elif args.task_name == 'adversarial_classification':
+        drop_last = False
+        data_set = Data(
+            args=args,
+            root_path=args.root_path,
+            flag=flag,
+        )
+
+
+
+        data_loader = DataLoader(
+            data_set,
+            batch_size=batch_size,
+            shuffle=shuffle_flag,
+            num_workers=args.num_workers,
+            drop_last=drop_last,
+            collate_fn=lambda x: collate_fn(x, max_len=args.seq_len)
+        )
+        return data_set, data_loader
     else:
         if args.data == 'm4':
             drop_last = False

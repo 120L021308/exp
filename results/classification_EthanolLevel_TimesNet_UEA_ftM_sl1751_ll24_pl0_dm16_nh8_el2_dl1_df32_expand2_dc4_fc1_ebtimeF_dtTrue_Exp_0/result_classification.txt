@@ -1,6 +1,0 @@
-classification_EthanolLevel_TimesNet_UEA_ftM_sl1751_ll24_pl0_dm16_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_Exp_0  
-accuracy:0.638
-
-classification_EthanolLevel_TimesNet_UEA_ftM_sl1751_ll24_pl0_dm16_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_Exp_0  
-accuracy:0.344
-

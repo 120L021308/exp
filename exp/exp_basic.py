@@ -6,6 +6,9 @@ import TimesNet
 class Exp_Basic(object):
     def __init__(self, args):
         self.args = args
+        # 添加默认参数，如果不存在
+        if not hasattr(self.args, 'checkpoints'):
+            self.args.checkpoints = './checkpoints'
         self.model_dict = {
             'TimesNet': TimesNet,
 
