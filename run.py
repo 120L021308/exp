@@ -63,12 +63,7 @@ if __name__ == '__main__':
                         help='whether to apply mask during validation')
     parser.add_argument('--filling_method', type=str, default='zero',
                         help='filling method for missing values: zero, mean, knn, interpolation')
-    parser.add_argument('--exact_mask_ratio', type=float, default=None,
-                        help='指定精确的掩码缺失比例，优先级高于max_missing')
-    parser.add_argument('--save_mask', action='store_true', default=False,
-                        help='是否保存掩码矩阵到文件')
-    parser.add_argument('--mask_save_path', type=str, default='./masks/',
-                        help='掩码矩阵保存路径')
+
 
     # model define
     parser.add_argument('--expand', type=int, default=2, help='expansion factor for Mamba')

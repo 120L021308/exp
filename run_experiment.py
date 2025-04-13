@@ -20,11 +20,13 @@ def main():
         'des': 'Exp',
         'itr': 1,
         'learning_rate': 0.001,
-        'train_epochs': 5,
+        'train_epochs': 20,
         'patience': 10,
-        'max_missing': 0.3,
+        'max_missing': 0.4,
         'target_performance_drop': 0.2,
-        'save_mask': 1
+        'mask_learning_rate': 0.05,
+        'performance_threshold': 0.01
+
 
     }
 
