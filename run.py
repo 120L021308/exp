@@ -43,7 +43,7 @@ if __name__ == '__main__':
     parser.add_argument('--mask_rate', type=float, default=0.25, help='mask ratio')
 
     # 对抗性掩码参数
-    parser.add_argument('--use_adversarial_mask', action='store_true', default=False,
+    parser.add_argument('--use_adversarial_mask', action='store_true', default=True,
                         help='whether to use adversarial masking')
     parser.add_argument('--use_random_mask', action='store_true', default=False,
                         help='whether to use random masking')
@@ -61,6 +61,7 @@ if __name__ == '__main__':
                         help='sparsity penalty coefficient')
     parser.add_argument('--apply_mask_in_validation', action='store_true', default=False,
                         help='whether to apply mask during validation')
+    # filling_methods = ['zero', 'mean', 'knn', 'interpolation']
     parser.add_argument('--filling_method', type=str, default='zero',
                         help='filling method for missing values: zero, mean, knn, interpolation')
 

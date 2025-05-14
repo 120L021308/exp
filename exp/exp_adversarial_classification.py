@@ -219,48 +219,60 @@ class Exp_AdversarialClassification(Exp_Basic):
         self.original_accuracy = None  # 存储原始模型准确率
         self.target_accuracy = None  # 目标准确率
 
-
-
-    def save_masks(self, masks, setting):
-        """保存对抗性掩码矩阵到文件
+    def save_masks(self, masks, setting, original_data=None):
+        """保存最终的对抗性掩码矩阵到文件
 
         Args:
             masks: 包含掩码信息的列表，每个元素是一个字典
             setting: 实验设置名称，用于文件路径
+            original_data: 原始数据列表，与掩码对应
         """
         # 创建结果目录
         folder_path = f'./results/{setting}/masks/'
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
 
-        # 保存掩码为 numpy 数组
-        for i, mask_info in enumerate(masks):
-            # 提取掩码矩阵
+        # 只保存最终epoch的掩码
+        final_masks = []
+        if masks:
+            # 获取最大的epoch值，即最后一个epoch
+            max_epoch = max([m.get('epoch', 0) for m in masks])
+            final_masks = [m for m in masks if m.get('epoch', 0) == max_epoch]
+
+            print(f"过滤后只保留最终epoch {max_epoch}的掩码，共 {len(final_masks)} 个")
+
+        # 保存最终掩码为 numpy 数组
+        saved_count = 0
+        for i, mask_info in enumerate(final_masks):
             if 'mask' in mask_info:
-                mask_matrix = mask_info['mask']
-                epoch = mask_info.get('epoch', 0)
                 batch_idx = mask_info.get('batch_idx', i)
 
-                # 保存为 numpy 文件，包含更多元数据
-                file_name = f'mask_e{epoch}_b{batch_idx}.npz'
-                np.savez(
-                    os.path.join(folder_path, file_name),
-                    mask=mask_matrix,
-                    zero_ratio=mask_info.get('zero_ratio', 0),
-                    epoch=epoch,
-                    batch_idx=batch_idx
-                )
+                # 创建保存数据
+                save_data = {
+                    'mask': mask_info['mask'],
+                    'zero_ratio': mask_info.get('zero_ratio', 0),
+                    'batch_idx': batch_idx,
+                    'epoch': mask_info.get('epoch', 0)
+                }
+
+                # 如果有原始数据，也保存对应的原始数据
+                if original_data is not None and batch_idx < len(original_data):
+                    save_data['original_data'] = original_data[batch_idx]
+
+                # 保存为 numpy 文件
+                file_name = f'final_mask_b{batch_idx}.npz'
+                np.savez(os.path.join(folder_path, file_name), **save_data)
+                saved_count += 1
 
         # 另外保存一个汇总文件，包含所有掩码的统计信息
-        summary_data = {
-            'zero_ratios': [m.get('zero_ratio', 0) for m in masks],
-            'epochs': [m.get('epoch', 0) for m in masks],
-            'batch_indices': [m.get('batch_idx', i) for i, m in enumerate(masks)]
-        }
-        np.savez(os.path.join(folder_path, 'masks_summary.npz'), **summary_data)
+        if final_masks:
+            summary_data = {
+                'zero_ratios': [m.get('zero_ratio', 0) for m in final_masks if 'mask' in m],
+                'batch_indices': [m.get('batch_idx', i) for i, m in enumerate(final_masks) if 'mask' in m]
+            }
+            np.savez(os.path.join(folder_path, 'final_masks_summary.npz'), **summary_data)
 
-        print(f"已保存 {len(masks)} 个掩码矩阵到 {folder_path}")
-
+        print(f"已保存 {saved_count} 个最终掩码矩阵到 {folder_path}")
 
 
     def _build_model(self):
@@ -434,51 +446,56 @@ class Exp_AdversarialClassification(Exp_Basic):
 
         return filled_x, final_mask, mask_stats
 
-    def vali(self, vali_data, vali_loader, criterion, apply_mask=True, save_masks=False):
+    def vali(self, vali_data, vali_loader, criterion, apply_mask=True, save_masks=False, return_original_data=False):
         """验证方法，可以选择是否应用对抗性掩码"""
         total_loss = []
         preds = []
         trues = []
         masks = []
+        original_data_list = []  # 存储原始数据
         self.model.eval()
 
-        print(f"验证集大小: {len(vali_loader)}")  # 检查数据加载器是否为空
+        print(f"验证集大小: {len(vali_loader)}")
 
         with torch.no_grad():
             for i, (batch_x, label, padding_mask) in enumerate(vali_loader):
-                # print(
-                #     f"处理批次 {i}, 形状: batch_x={batch_x.shape}, label={label.shape}, padding_mask={padding_mask.shape}")
-
                 batch_x = batch_x.float().to(self.device)
                 padding_mask = padding_mask.float().to(self.device)
                 label = label.to(self.device)
 
+                # 存储原始数据
+                if return_original_data:
+                    original_data_list.append({
+                        'batch_x': batch_x.cpu().numpy(),
+                        'label': label.cpu().numpy(),
+                        'batch_idx': i
+                    })
+
                 # 在验证时应用掩码和填充
+                applied_mask = None
                 if apply_mask and hasattr(self.args, 'apply_mask_in_validation') and self.args.apply_mask_in_validation:
                     batch_size, seq_len, feature_dim = batch_x.shape
                     # 生成随机掩码
                     mask_probs = torch.rand(batch_size, seq_len, feature_dim, device=self.device)
                     mask = (mask_probs > self.args.max_missing).float()  # 随机生成掩码
-                    masks.append(mask.cpu().numpy())
+                    applied_mask = mask.cpu().numpy()
+                    masks.append({
+                        'mask': applied_mask,
+                        'batch_idx': i,
+                        'zero_ratio': 1.0 - mask.mean().item()
+                    })
 
                     # 应用掩码和填充
                     batch_x = self.adv_masking.fill_with_method(
                         batch_x, mask, method=self.args.filling_method
                     )
 
-
                 try:
-                    # 在调用模型之前添加更多调试信息
-                    # print(
-                    #     f"  调用模型: self.model(batch_x={batch_x.shape}, padding_mask={padding_mask.shape}, None, None)")
-
                     outputs = self.model(batch_x, padding_mask, None, None)
 
                     if outputs is None:
                         print(f"  警告: 模型输出为None，跳过此批次")
                         continue
-
-                    # print(f"  模型输出形状: {outputs.shape}")
 
                     pred = outputs.detach().cpu()
                     loss = criterion(pred, label.long().squeeze().cpu())
@@ -486,7 +503,6 @@ class Exp_AdversarialClassification(Exp_Basic):
 
                     preds.append(outputs.detach())
                     trues.append(label)
-                    # print(f"  成功添加到preds列表，当前长度: {len(preds)}")
 
                 except Exception as e:
                     print(f"  处理批次 {i} 时出错: {str(e)}")
@@ -498,7 +514,7 @@ class Exp_AdversarialClassification(Exp_Basic):
 
         if len(preds) == 0:
             print("警告: preds列表为空，无法计算准确率")
-            return 0.0, 0.0  # 返回默认值，避免后续错误
+            return (0.0, 0.0, []) if return_original_data else (0.0, 0.0)
 
         total_loss = np.average(total_loss) if total_loss else 0.0
 
@@ -511,10 +527,14 @@ class Exp_AdversarialClassification(Exp_Basic):
 
         self.model.train()
 
+        # 返回原始数据（如果需要）
+        if return_original_data:
+            return total_loss, accuracy, original_data_list
+
         # 返回掩码信息（如果应用了掩码）
         if apply_mask and hasattr(self.args,
                                   'apply_mask_in_validation') and self.args.apply_mask_in_validation and masks:
-            return total_loss, accuracy, np.concatenate(masks, axis=0)
+            return total_loss, accuracy, masks
 
         return total_loss, accuracy
 
@@ -543,10 +563,15 @@ class Exp_AdversarialClassification(Exp_Basic):
         # 计算目标准确率
         target_acc = self._calculate_target_accuracy()
 
+        # 存储最终epoch的原始数据和掩码
+        final_masks_info = []
+        final_original_data = []
+
         for epoch in range(self.args.train_epochs):
             iter_count = 0
             train_loss = []
             masks_info = []  # 存储掩码信息用于分析
+            epoch_original_data = []  # 存储当前epoch的原始数据
 
             self.model.train()
             epoch_time = time.time()
@@ -558,6 +583,14 @@ class Exp_AdversarialClassification(Exp_Basic):
                 batch_x = batch_x.float().to(self.device)
                 padding_mask = padding_mask.float().to(self.device)
                 label = label.to(self.device)
+
+                # 存储原始数据
+                original_batch_data = {
+                    'batch_x': batch_x.cpu().numpy(),
+                    'label': label.cpu().numpy(),
+                    'batch_idx': i
+                }
+                epoch_original_data.append(original_batch_data)
 
                 # 生成对抗性掩码并应用
                 if hasattr(self.args, 'use_adversarial_mask') and self.args.use_adversarial_mask:
@@ -582,6 +615,7 @@ class Exp_AdversarialClassification(Exp_Basic):
                     )
                     # 记录掩码信息
                     masks_info.append({
+                        'mask': mask.cpu().numpy(),
                         'zero_ratio': (1.0 - mask.mean().item()),
                         'batch_idx': i,
                         'epoch': epoch
@@ -612,25 +646,23 @@ class Exp_AdversarialClassification(Exp_Basic):
                 "Epoch: {0}, Steps: {1} | Train Loss: {2:.3f} Vali Loss: {3:.3f} Vali Acc: {4:.3f} Test Loss: {5:.3f} Test Acc: {6:.3f}"
                 .format(epoch + 1, train_steps, train_loss, vali_loss, val_accuracy, test_loss, test_accuracy))
 
-            # 保存本轮掩码信息
-            if len(masks_info) > 0:
-                mask_path = os.path.join(path, f'mask_info_epoch_{epoch + 1}.npy')
-                np.save(mask_path, masks_info)
+            # 如果是最后一个epoch，保存掩码和原始数据
+            if epoch == self.args.train_epochs - 1:
+                final_masks_info = masks_info
+                final_original_data = epoch_original_data
 
             early_stopping(-val_accuracy, self.model, path)
             if early_stopping.early_stop:
                 print("Early stopping")
-                # 保存训练过程中收集的所有掩码
-                if len(masks_info) > 0:
-                    self.save_masks(masks_info, setting + '_train')
                 break
-
-
 
         best_model_path = path + '/' + 'checkpoint.pth'
         self.model.load_state_dict(torch.load(best_model_path))
-        if len(masks_info) > 0:
-            self.save_masks(masks_info, setting + '_train')
+
+        # 保存最终的掩码和原始数据
+        if final_masks_info:
+            self.save_masks(final_masks_info, setting + '_train', final_original_data)
+
         return self.model
 
     def test(self, setting, test=0):
@@ -650,39 +682,40 @@ class Exp_AdversarialClassification(Exp_Basic):
         filling_methods = ['zero', 'mean', 'knn', 'interpolation']
         results = {'original': original_accuracy}
 
-        # 用于收集所有测试掩码
+        # 用于收集所有测试掩码和原始数据
         test_masks_info = []
+        test_original_data = []
+
+        # 首先获取所有原始测试数据
+        _, _, original_data_list = self.vali(
+            test_data, test_loader, criterion, apply_mask=False, return_original_data=True
+        )
+        test_original_data = original_data_list
 
         for method in filling_methods:
             print(f"使用{method}填充方法评估模型性能...")
             self.args.filling_method = method
             self.args.apply_mask_in_validation = True
 
-            # 捕获返回的掩码
-            method_result = self.vali(test_data, test_loader, criterion, apply_mask=True)
+            # 评估性能并获取掩码
+            method_loss, method_accuracy, method_masks = self.vali(
+                test_data, test_loader, criterion, apply_mask=True
+            )
 
-            # 处理返回结果
-            if len(method_result) == 3:
-                method_loss, method_accuracy, method_masks = method_result
-                # 保存掩码信息
-                for i, mask_matrix in enumerate(np.split(method_masks, method_masks.shape[0])):
-                    test_masks_info.append({
-                        'mask': mask_matrix.squeeze(0),  # 移除批次维度
-                        'method': method,
-                        'batch_idx': i,
-                        'zero_ratio': 1.0 - np.mean(mask_matrix)
-                    })
-            else:
-                method_loss, method_accuracy = method_result
+            # 将掩码添加到总列表
+            for mask_info in method_masks:
+                mask_info['method'] = method
+                mask_info['epoch'] = 0  # 测试阶段设置为0
+                test_masks_info.append(mask_info)
 
             results[method] = method_accuracy
 
             print(f"使用{method}填充的准确率: {method_accuracy:.4f}, "
                   f"相比原始下降: {(original_accuracy - method_accuracy) / original_accuracy:.2%}")
 
-        # 保存测试期间收集的掩码
+        # 保存测试期间收集的掩码和原始数据
         if test_masks_info:
-            self.save_masks(test_masks_info, setting + '_test')
+            self.save_masks(test_masks_info, setting + '_test', test_original_data)
 
         # 结果保存
         folder_path = './results/' + setting + '/'
