@@ -9,7 +9,7 @@ def main():
         'task_name': 'adversarial_classification',
         'is_training': 1,
         'root_path': './dataset/Chinatown/',
-        'model_id': 'Chinatown',
+        'model_id': 'Chinatown_AdvTest',
         'model': 'TimesNet',
         'data': 'UEA',
         'e_layers': 2,
@@ -25,7 +25,9 @@ def main():
         'max_missing': 0.4,
         'target_performance_drop': 0.2,
         'mask_learning_rate': 0.05,
-        'performance_threshold': 0.01,
+        'performance_threshold': 0.05,
+        'lambda_sparsity': 100.0
+
 
 
 
@@ -39,6 +41,7 @@ def main():
     for key, value in config.items():
         cmd.append(f"--{key}")
         cmd.append(str(value))
+    cmd.append("--use_adversarial_mask")
 
     print("执行命令:", " ".join(cmd))
 

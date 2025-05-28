@@ -753,5 +753,5 @@ def main_analysis(experiment_name, search=True):
 # 使用示例
 if __name__ == "__main__":
     # 使用完整的目录名
-    experiment_name = "adversarial_classification_Chinatown_TimesNet_UEA_ftM_sl24_ll24_pl0_dm16_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_Exp_0_test"
+    experiment_name = "adversarial_classification_Chinatown_AdvTest_TimesNet_UEA_ftM_sl24_ll24_pl0_dm16_nh8_el2_dl1_df32_expand2_dc4_fc1_ebtimeF_dtTrue_Exp_0_train"
     main_analysis(experiment_name)

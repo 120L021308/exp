@@ -27,7 +27,7 @@ class AdversarialMasking:
     def initialize_mask(self, batch_size, seq_len, feature_dim):
         """初始化掩码矩阵的logits参数"""
         # 初始化为较小的负值，使得初始掩码主要为1（保留）
-        mask_logits = -3.0 * torch.ones(batch_size, seq_len, feature_dim, device=self.device)
+        mask_logits = 0.5 * torch.ones(batch_size, seq_len, feature_dim, device=self.device)
         return mask_logits
 
     def gumbel_softmax(self, logits, temperature=None, hard=False):
@@ -88,10 +88,11 @@ class AdversarialMasking:
         return x * mask  # 缺失位置为0
 
     def fill_mean(self, x, mask):
-        """均值填充"""
-        # 计算每个特征的均值（沿时间维度）
-        feature_means = torch.mean(x, dim=1, keepdim=True)
-        # 在缺失位置填充均值
+        masked_x = x * mask
+        sum_x = torch.sum(masked_x, dim=1, keepdim=True)
+        count_x = torch.sum(mask, dim=1, keepdim=True)
+        count_x = torch.where(count_x == 0, torch.ones_like(count_x), count_x)  # Avoid division by zero
+        feature_means = sum_x / count_x
         filled_x = x * mask + feature_means * (1 - mask)
         return filled_x
 
@@ -143,42 +144,33 @@ class AdversarialMasking:
         return filled_x
 
     def fill_interpolation(self, x, mask):
-        """线性插值填充"""
+        """线性插值填充 (per feature, per sample)"""
         batch_size, seq_len, feature_dim = x.shape
         filled_x = x.clone()
 
-        # 对每个样本和每个特征进行线性插值
         for b in range(batch_size):
             for f in range(feature_dim):
-                # 找出非缺失位置的索引和值
-                valid_indices = torch.where(mask[b, :, f] > 0.5)[0]
+                # Get the values and their indices where data is not missing
+                valid_mask_f = mask[b, :, f] > 0.5
+                indices = torch.arange(seq_len, device=x.device)
 
-                if len(valid_indices) > 1:  # 至少需要两个点才能插值
-                    valid_values = x[b, valid_indices, f]
+                valid_indices = indices[valid_mask_f]
+                valid_values = x[b, valid_mask_f, f]
 
-                    # 对所有位置进行插值
-                    for t in range(seq_len):
-                        if mask[b, t, f] < 0.5:  # 缺失位置
-                            # 找到最近的前后有效点
-                            prev_indices = valid_indices[valid_indices < t]
-                            next_indices = valid_indices[valid_indices > t]
+                if len(valid_indices) == 0:  # No valid points to interpolate from
+                    continue
+                if len(valid_indices) == 1:  # Only one valid point, fill with it
+                    filled_x[b, ~valid_mask_f, f] = valid_values[0]
+                    continue
 
-                            prev_idx = prev_indices.max().item() if len(prev_indices) > 0 else valid_indices[0].item()
-                            next_idx = next_indices.min().item() if len(next_indices) > 0 else valid_indices[-1].item()
-
-                            prev_val = x[b, prev_idx, f]
-                            next_val = x[b, next_idx, f]
-
-                            # 线性插值
-                            if next_idx > prev_idx:
-                                weight = (t - prev_idx) / (next_idx - prev_idx)
-                                filled_x[b, t, f] = prev_val * (1 - weight) + next_val * weight
-                            else:
-                                filled_x[b, t, f] = prev_val  # 退化情况
-                elif len(valid_indices) == 1:  # 只有一个有效点，用常数填充
-                    missing_indices = torch.where(mask[b, :, f] < 0.5)[0]
-                    filled_x[b, missing_indices, f] = x[b, valid_indices[0], f]
-
+                # Perform interpolation for missing points
+                missing_indices = indices[~valid_mask_f]
+                if len(missing_indices) > 0:
+                    # np.interp requires numpy arrays
+                    interp_values = np.interp(missing_indices.cpu().numpy(),
+                                              valid_indices.cpu().numpy(),
+                                              valid_values.cpu().numpy())
+                    filled_x[b, missing_indices, f] = torch.tensor(interp_values, dtype=x.dtype, device=x.device)
         return filled_x
 
     def fill_with_method(self, x, mask, method='zero'):
@@ -209,7 +201,7 @@ class Exp_AdversarialClassification(Exp_Basic):
         if not hasattr(args, 'mask_learning_rate'):
             args.mask_learning_rate = 0.01  # 默认掩码学习率
         if not hasattr(args, 'filling_method'):
-            args.filling_method = 'zero'  # 默认填充方法
+            args.filling_method = 'mean'  # 默认填充方法
 
         # 调用基类初始化，这会调用_build_model方法
         super(Exp_AdversarialClassification, self).__init__(args)
@@ -539,9 +531,9 @@ class Exp_AdversarialClassification(Exp_Basic):
         return total_loss, accuracy
 
     def train(self, setting):
-        """训练方法以集成对抗性掩码和填充"""
+        """训练方法以集成对抗性掩码和填充 (已修改以确保早停时保存掩码)"""
         train_data, train_loader = self._get_data(flag='TRAIN')
-        vali_data, vali_loader = self._get_data(flag='TEST')
+        vali_data, vali_loader = self._get_data(flag='TEST')  # 通常验证集用 'VAL' 或 'VALID' flag，这里按原样保留 'TEST'
         test_data, test_loader = self._get_data(flag='TEST')
 
         path = os.path.join(self.args.checkpoints, setting)
@@ -561,7 +553,7 @@ class Exp_AdversarialClassification(Exp_Basic):
         print("训练开始...")
 
         # 计算目标准确率
-        target_acc = self._calculate_target_accuracy()
+        target_acc = self._calculate_target_accuracy()  # target_acc 变量未使用，可以移除或后续使用
 
         # 存储最终epoch的原始数据和掩码
         final_masks_info = []
@@ -570,7 +562,7 @@ class Exp_AdversarialClassification(Exp_Basic):
         for epoch in range(self.args.train_epochs):
             iter_count = 0
             train_loss = []
-            masks_info = []  # 存储掩码信息用于分析
+            masks_info = []  # 存储当前epoch的掩码信息用于分析
             epoch_original_data = []  # 存储当前epoch的原始数据
 
             self.model.train()
@@ -588,44 +580,57 @@ class Exp_AdversarialClassification(Exp_Basic):
                 original_batch_data = {
                     'batch_x': batch_x.cpu().numpy(),
                     'label': label.cpu().numpy(),
-                    'batch_idx': i
+                    'batch_idx': i  # 这是批次在当前 epoch 内的索引
                 }
                 epoch_original_data.append(original_batch_data)
 
                 # 生成对抗性掩码并应用
                 if hasattr(self.args, 'use_adversarial_mask') and self.args.use_adversarial_mask:
-                    masked_x, mask, mask_stats = self.train_adversarial_mask(batch_x, label, padding_mask)
-                    # 记录掩码信息
-                    mask_stats.update({
-                        'batch_idx': i,
-                        'epoch': epoch
-                    })
-                    masks_info.append(mask_stats)
-                    batch_x = masked_x
+                    # 确保 self.adv_masking 已经初始化
+                    if not hasattr(self, 'adv_masking'):
+                        # 如果在 __init__ 中创建，这里应该总是存在
+                        # 但作为安全检查，可以考虑在 __init__ 中确保它被创建
+                        # 或者在这里按需创建，但这通常不是最佳实践
+                        print("警告: AdversarialMasking 工具未初始化!")
+                        # 可以选择跳过或引发错误
+                    else:
+                        masked_x, mask, mask_stats = self.train_adversarial_mask(batch_x, label, padding_mask)
+                        # 记录掩码信息
+                        mask_stats.update({
+                            'batch_idx': i,  # 这是批次在当前 epoch 内的索引
+                            'epoch': epoch
+                        })
+                        masks_info.append(mask_stats)
+                        batch_x = masked_x  # 使用经过掩码和填充处理后的数据进行训练
 
                 # 如果不使用对抗性掩码但需要随机掩码
                 elif hasattr(self.args, 'use_random_mask') and self.args.use_random_mask:
-                    batch_size, seq_len, feature_dim = batch_x.shape
-                    # 生成随机掩码
-                    mask_probs = torch.rand(batch_size, seq_len, feature_dim, device=self.device)
-                    mask = (mask_probs > self.args.max_missing).float()
-                    # 应用掩码和填充
-                    batch_x = self.adv_masking.fill_with_method(
-                        batch_x, mask, method=self.args.filling_method
-                    )
-                    # 记录掩码信息
-                    masks_info.append({
-                        'mask': mask.cpu().numpy(),
-                        'zero_ratio': (1.0 - mask.mean().item()),
-                        'batch_idx': i,
-                        'epoch': epoch
-                    })
+                    # 确保 self.adv_masking 已经初始化 (因为它包含填充方法)
+                    if not hasattr(self, 'adv_masking'):
+                        print("警告: AdversarialMasking 工具未初始化 (用于随机掩码填充)!")
+                    else:
+                        batch_size_rand, seq_len_rand, feature_dim_rand = batch_x.shape
+                        # 生成随机掩码
+                        mask_probs_rand = torch.rand(batch_size_rand, seq_len_rand, feature_dim_rand,
+                                                     device=self.device)
+                        mask_rand = (mask_probs_rand > self.args.max_missing).float()
+                        # 应用掩码和填充
+                        batch_x = self.adv_masking.fill_with_method(
+                            batch_x, mask_rand, method=self.args.filling_method
+                        )
+                        # 记录掩码信息
+                        masks_info.append({
+                            'mask': mask_rand.cpu().numpy(),
+                            'zero_ratio': (1.0 - mask_rand.mean().item()),
+                            'batch_idx': i,
+                            'epoch': epoch
+                        })
 
-                outputs = self.model(batch_x, padding_mask, None, None)
+                outputs = self.model(batch_x, padding_mask, None, None)  # 这里的 batch_x 可能是原始的，也可能是处理过的
                 loss = criterion(outputs, label.long().squeeze(-1))
                 train_loss.append(loss.item())
 
-                if (i + 1) % 100 == 0:
+                if (i + 1) % 100 == 0:  # 每100个iter打印一次信息
                     print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
                     speed = (time.time() - time_now) / iter_count
                     left_time = speed * ((self.args.train_epochs - epoch) * train_steps - i)
@@ -634,34 +639,54 @@ class Exp_AdversarialClassification(Exp_Basic):
                     time_now = time.time()
 
                 loss.backward()
-                nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=4.0)
+                # 梯度裁剪，防止梯度爆炸
+                if hasattr(self.args,
+                           'clip_grad_norm') and self.args.clip_grad_norm is not None and self.args.clip_grad_norm > 0:
+                    nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.args.clip_grad_norm)
+                else:  # 使用原代码的默认值或一个通用值
+                    nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=4.0)
                 model_optim.step()
 
+            # --- Epoch 结束 ---
             print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
-            train_loss = np.average(train_loss)
-            vali_loss, val_accuracy = self.vali(vali_data, vali_loader, criterion)
-            test_loss, test_accuracy = self.vali(test_data, test_loader, criterion)
+            train_loss_avg = np.average(train_loss) if train_loss else 0.0  # 处理 train_loss 为空的情况
+
+            # 在验证/测试前，将模型设置为评估模式
+            self.model.eval()  # 确保在vali和test中模型是eval模式，vali方法内部应该也有
+            vali_loss, val_accuracy = self.vali(vali_data, vali_loader, criterion, apply_mask=False)  # 验证时通常不用掩码
+            test_loss, test_accuracy = self.vali(test_data, test_loader, criterion, apply_mask=False)  # 测试时通常不用掩码
+            self.model.train()  # 恢复为训练模式，准备下一个epoch
 
             print(
                 "Epoch: {0}, Steps: {1} | Train Loss: {2:.3f} Vali Loss: {3:.3f} Vali Acc: {4:.3f} Test Loss: {5:.3f} Test Acc: {6:.3f}"
-                .format(epoch + 1, train_steps, train_loss, vali_loss, val_accuracy, test_loss, test_accuracy))
+                .format(epoch + 1, train_steps, train_loss_avg, vali_loss, val_accuracy, test_loss, test_accuracy))
 
-            # 如果是最后一个epoch，保存掩码和原始数据
-            if epoch == self.args.train_epochs - 1:
+            # 【修改点】始终用当前已完成的epoch的掩码和原始数据更新 final_masks_info 和 final_original_data
+            # 这样即使发生早停，这些变量也会包含最后一个实际执行的完整epoch的数据。
+            # save_masks 函数内部会处理只保存最后一个epoch（max_epoch）的掩码。
+            if masks_info:  # 只有当 masks_info 不为空时才更新，避免覆盖成空列表
                 final_masks_info = masks_info
                 final_original_data = epoch_original_data
 
-            early_stopping(-val_accuracy, self.model, path)
+            early_stopping(-val_accuracy, self.model, path)  # Early stopping监视验证集准确率（负数，因为通常早停类监视损失）
             if early_stopping.early_stop:
                 print("Early stopping")
-                break
+                break  # 跳出 epoch 循环
 
-        best_model_path = path + '/' + 'checkpoint.pth'
-        self.model.load_state_dict(torch.load(best_model_path))
+        # --- 训练循环结束 ---
+        print("加载最佳模型 (来自早停或最后一个epoch的模型)...")
+        best_model_path = os.path.join(path, 'checkpoint.pth')  # 确保路径正确
+        if os.path.exists(best_model_path):
+            self.model.load_state_dict(torch.load(best_model_path, map_location=self.device))
+        else:
+            print(f"警告: 未找到最佳模型路径 {best_model_path}。将使用最后一个epoch的模型状态。")
 
         # 保存最终的掩码和原始数据
-        if final_masks_info:
+        if final_masks_info:  # 如果 final_masks_info 有内容 (即至少一个epoch生成了掩码)
+            print(f"准备保存 {len(final_masks_info)} 条掩码信息 (来自最后一个实际运行的epoch)...")
             self.save_masks(final_masks_info, setting + '_train', final_original_data)
+        else:
+            print("没有可供保存的训练掩码信息 (final_masks_info 为空)。")
 
         return self.model
 
