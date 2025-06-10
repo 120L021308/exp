@@ -3,7 +3,7 @@ import os
 import torch
 import torch.backends
 
-from exp.exp_imputation import Exp_Imputation
+
 from exp.exp_classification import Exp_Classification
 # 导入新的对抗性分类实验类
 from exp.exp_adversarial_classification import Exp_AdversarialClassification
@@ -174,9 +174,8 @@ if __name__ == '__main__':
     print_args(args)
 
     # 根据任务类型选择实验类
-    if args.task_name == 'imputation':
-        Exp = Exp_Imputation
-    elif args.task_name == 'classification':
+
+    if args.task_name == 'classification':
         Exp = Exp_Classification
     elif args.task_name == 'adversarial_classification':
         Exp = Exp_AdversarialClassification

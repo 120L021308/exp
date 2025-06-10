@@ -1,5 +1,8 @@
 import os
 import torch
+
+import Informer
+import Nonstationary_Transformer
 import TimesNet
 
 
@@ -11,6 +14,8 @@ class Exp_Basic(object):
             self.args.checkpoints = './checkpoints'
         self.model_dict = {
             'TimesNet': TimesNet,
+            'Nonstationary_Transformer': Nonstationary_Transformer,
+            'Informer': Informer
 
         }
 

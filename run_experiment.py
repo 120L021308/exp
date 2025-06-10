@@ -6,11 +6,11 @@ import sys
 def main():
     # 配置实验参数
     config = {
-        'task_name': 'adversarial_classification',
+        'task_name': 'classification',
         'is_training': 1,
         'root_path': './dataset/Chinatown/',
         'model_id': 'Chinatown_AdvTest',
-        'model': 'TimesNet',
+        'model': 'Informer',
         'data': 'UEA',
         'e_layers': 2,
         'batch_size': 16,
