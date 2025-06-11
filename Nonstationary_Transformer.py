@@ -70,35 +70,8 @@ class Model(nn.Module):
             ],
             norm_layer=torch.nn.LayerNorm(configs.d_model)
         )
-        # Decoder
-        if self.task_name == 'long_term_forecast' or self.task_name == 'short_term_forecast':
-            self.dec_embedding = DataEmbedding(configs.dec_in, configs.d_model, configs.embed, configs.freq,
-                                               configs.dropout)
-            self.decoder = Decoder(
-                [
-                    DecoderLayer(
-                        AttentionLayer(
-                            DSAttention(True, configs.factor, attention_dropout=configs.dropout,
-                                        output_attention=False),
-                            configs.d_model, configs.n_heads),
-                        AttentionLayer(
-                            DSAttention(False, configs.factor, attention_dropout=configs.dropout,
-                                        output_attention=False),
-                            configs.d_model, configs.n_heads),
-                        configs.d_model,
-                        configs.d_ff,
-                        dropout=configs.dropout,
-                        activation=configs.activation,
-                    )
-                    for l in range(configs.d_layers)
-                ],
-                norm_layer=torch.nn.LayerNorm(configs.d_model),
-                projection=nn.Linear(configs.d_model, configs.c_out, bias=True)
-            )
-        if self.task_name == 'imputation':
-            self.projection = nn.Linear(configs.d_model, configs.c_out, bias=True)
-        if self.task_name == 'anomaly_detection':
-            self.projection = nn.Linear(configs.d_model, configs.c_out, bias=True)
+        Decoder
+
         if self.task_name == 'classification':
             self.act = F.gelu
             self.dropout = nn.Dropout(configs.dropout)
@@ -109,82 +82,17 @@ class Model(nn.Module):
         self.delta_learner = Projector(enc_in=configs.enc_in, seq_len=configs.seq_len,
                                        hidden_dims=configs.p_hidden_dims, hidden_layers=configs.p_hidden_layers,
                                        output_dim=configs.seq_len)
+        if self.task_name == 'adversarial_cclassification':
+            self.act = F.gelu
+            self.dropout = nn.Dropout(configs.dropout)
+            self.projection = nn.Linear(configs.d_model * configs.seq_len, configs.num_class)
 
-    def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
-        x_raw = x_enc.clone().detach()
+        self.tau_learner = Projector(enc_in=configs.enc_in, seq_len=configs.seq_len, hidden_dims=configs.p_hidden_dims,
+                                     hidden_layers=configs.p_hidden_layers, output_dim=1)
+        self.delta_learner = Projector(enc_in=configs.enc_in, seq_len=configs.seq_len,
+                                       hidden_dims=configs.p_hidden_dims, hidden_layers=configs.p_hidden_layers,
+                                       output_dim=configs.seq_len)
 
-        # Normalization
-        mean_enc = x_enc.mean(1, keepdim=True).detach()  # B x 1 x E
-        x_enc = x_enc - mean_enc
-        std_enc = torch.sqrt(torch.var(x_enc, dim=1, keepdim=True, unbiased=False) + 1e-5).detach()  # B x 1 x E
-        x_enc = x_enc / std_enc
-        # B x S x E, B x 1 x E -> B x 1, positive scalar
-        tau = self.tau_learner(x_raw, std_enc)
-        threshold = 80.0
-        tau_clamped = torch.clamp(tau, max=threshold)  # avoid numerical overflow
-        tau = tau_clamped.exp()
-        # B x S x E, B x 1 x E -> B x S
-        delta = self.delta_learner(x_raw, mean_enc)
-
-        x_dec_new = torch.cat([x_enc[:, -self.label_len:, :], torch.zeros_like(x_dec[:, -self.pred_len:, :])],
-                              dim=1).to(x_enc.device).clone()
-
-        enc_out = self.enc_embedding(x_enc, x_mark_enc)
-        enc_out, attns = self.encoder(enc_out, attn_mask=None, tau=tau, delta=delta)
-
-        dec_out = self.dec_embedding(x_dec_new, x_mark_dec)
-        dec_out = self.decoder(dec_out, enc_out, x_mask=None, cross_mask=None, tau=tau, delta=delta)
-        dec_out = dec_out * std_enc + mean_enc
-        return dec_out
-
-    def imputation(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask):
-        x_raw = x_enc.clone().detach()
-
-        # Normalization
-        mean_enc = torch.sum(x_enc, dim=1) / torch.sum(mask == 1, dim=1)
-        mean_enc = mean_enc.unsqueeze(1).detach()
-        x_enc = x_enc - mean_enc
-        x_enc = x_enc.masked_fill(mask == 0, 0)
-        std_enc = torch.sqrt(torch.sum(x_enc * x_enc, dim=1) / torch.sum(mask == 1, dim=1) + 1e-5)
-        std_enc = std_enc.unsqueeze(1).detach()
-        x_enc /= std_enc
-        # B x S x E, B x 1 x E -> B x 1, positive scalar
-        tau = self.tau_learner(x_raw, std_enc)
-        threshold = 80.0
-        tau_clamped = torch.clamp(tau, max=threshold)  # avoid numerical overflow
-        tau = tau_clamped.exp()
-        # B x S x E, B x 1 x E -> B x S
-        delta = self.delta_learner(x_raw, mean_enc)
-
-        enc_out = self.enc_embedding(x_enc, x_mark_enc)
-        enc_out, attns = self.encoder(enc_out, attn_mask=None, tau=tau, delta=delta)
-
-        dec_out = self.projection(enc_out)
-        dec_out = dec_out * std_enc + mean_enc
-        return dec_out
-
-    def anomaly_detection(self, x_enc):
-        x_raw = x_enc.clone().detach()
-
-        # Normalization
-        mean_enc = x_enc.mean(1, keepdim=True).detach()  # B x 1 x E
-        x_enc = x_enc - mean_enc
-        std_enc = torch.sqrt(torch.var(x_enc, dim=1, keepdim=True, unbiased=False) + 1e-5).detach()  # B x 1 x E
-        x_enc = x_enc / std_enc
-        # B x S x E, B x 1 x E -> B x 1, positive scalar
-        tau = self.tau_learner(x_raw, std_enc)
-        threshold = 80.0
-        tau_clamped = torch.clamp(tau, max=threshold)  # avoid numerical overflow
-        tau = tau_clamped.exp()
-        # B x S x E, B x 1 x E -> B x S
-        delta = self.delta_learner(x_raw, mean_enc)
-        # embedding
-        enc_out = self.enc_embedding(x_enc, None)
-        enc_out, attns = self.encoder(enc_out, attn_mask=None, tau=tau, delta=delta)
-
-        dec_out = self.projection(enc_out)
-        dec_out = dec_out * std_enc + mean_enc
-        return dec_out
 
     def classification(self, x_enc, x_mark_enc):
         x_raw = x_enc.clone().detach()

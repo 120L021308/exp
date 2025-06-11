@@ -6,11 +6,11 @@ import sys
 def main():
     # 配置实验参数
     config = {
-        'task_name': 'classification',
+        'task_name': 'adversarial_classification',
         'is_training': 1,
         'root_path': './dataset/Chinatown/',
         'model_id': 'Chinatown_AdvTest',
-        'model': 'Informer',
+        'model': 'Nonstationary_Transformer',
         'data': 'UEA',
         'e_layers': 2,
         'batch_size': 16,
