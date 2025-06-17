@@ -6,16 +6,16 @@ import sys
 def main():
     # 配置实验参数
     config = {
-        'task_name': 'adversarial_classification',
+        'task_name': 'classification',
         'is_training': 1,
-        'root_path': './dataset/Chinatown/',
-        'model_id': 'Chinatown_AdvTest',
+        'root_path': './dataset/EthanolConcentration/',
+        'model_id': 'EthanolConcentration',
         'model': 'Nonstationary_Transformer',
         'data': 'UEA',
-        'e_layers': 2,
-        'batch_size': 16,
-        'd_model': 16,
-        'd_ff': 32,
+        'e_layers': 3,
+        'batch_size': 4,
+        'd_model': 128,
+        'd_ff': 256,
         'top_k': 3,
         'des': 'Exp',
         'itr': 1,

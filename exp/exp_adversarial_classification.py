@@ -399,7 +399,7 @@ class Exp_AdversarialClassification(Exp_Basic):
 
             # 如果当前准确率高于目标，则增加损失（使准确率降低）
             # 否则降低损失（避免准确率降低过多）
-            loss_sign = 1.0 if current_accuracy > target_accuracy else -1.0
+            loss_sign = -1.0 if current_accuracy > target_accuracy else 1.0
             loss = loss_sign * classification_loss + sparsity_penalty
 
             loss.backward()
